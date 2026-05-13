@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
-    "time"
+	"time"
 )
 
 func main() {
@@ -14,18 +14,16 @@ func main() {
 
 	filename := os.Args[1]
 	// Создать пустой файл
-    file, err := os.Create(filename)
-    if err != nil {
+	file, err := os.Create(filename)
+	if err != nil {
 		fmt.Println("Ошибка во время создания:", err)
 	} else {
 		fmt.Println("Файл создан", err)
 	}
-    file.Close()
+	file.Close()
 
-    // Обновить время изменения
-    now := time.Now()
-    err := os.Chtimes("file.txt", now, now)
-	
-	
+	// Обновить время изменения
+	now := time.Now()
+	err = os.Chtimes("file.txt", now, now)
 
 }
