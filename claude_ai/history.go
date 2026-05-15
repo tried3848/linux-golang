@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"flag"
 	"fmt"
 	"os"
@@ -10,139 +9,134 @@ import (
 	"strings"
 )
 
-// HistoryEntry хранит одну запись истории
-type HistoryEntry struct {
-	Number  int
-	Command string
-}
-
-// historyFile возвращает путь к файлу истории
-func historyFile() string {
+func getHistoryFile() string {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return ".shell_history"
+		fmt.Fprintf(os.Stderr, "history: не удалось найти домашнюю директорию: %v\n", err)
+		os.Exit(1)
 	}
-	return filepath.Join(home, ".shell_history")
+	return filepath.Join(home, ".bash_history")
 }
 
-// loadHistory читает историю команд из файла
-func loadHistory() []HistoryEntry {
-	var entries []HistoryEntry
-	f, err := os.Open(historyFile())
+func readHistory() ([]string, error) {
+	path := getHistoryFile()
+	data, err := os.ReadFile(path)
 	if err != nil {
-		return entries // Если файл не существует — пустая история
+		return nil, fmt.Errorf("не удалось прочитать файл истории: %v", err)
 	}
-	defer f.Close()
-
-	scanner := bufio.NewScanner(f)
-	num := 1
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.TrimSpace(line) != "" {
-			entries = append(entries, HistoryEntry{Number: num, Command: line})
-			num++
-		}
-	}
-	return entries
+	lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	return lines, nil
 }
 
-// saveHistory записывает команду в файл истории
-func saveHistory(cmd string) error {
-	f, err := os.OpenFile(historyFile(), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+func writeHistory(lines []string) error {
+	path := getHistoryFile()
+	content := strings.Join(lines, "\n") + "\n"
+	return os.WriteFile(path, []byte(content), 0600)
+}
+
+func showHistory(n int) {
+	lines, err := readHistory()
 	if err != nil {
-		return err
+		fmt.Fprintln(os.Stderr, "history:", err)
+		os.Exit(1)
 	}
-	defer f.Close()
-	_, err = fmt.Fprintln(f, cmd)
-	return err
+
+	start := 0
+	if n > 0 && n < len(lines) {
+		start = len(lines) - n
+	}
+
+	for i := start; i < len(lines); i++ {
+		fmt.Printf("%5d  %s\n", i+1, lines[i])
+	}
+}
+
+func clearHistory() {
+	err := writeHistory([]string{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "history: не удалось очистить историю: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("История очищена.")
+}
+
+func deleteEntry(offset int) {
+	lines, err := readHistory()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "history:", err)
+		os.Exit(1)
+	}
+
+	index := offset - 1 // offset начинается с 1
+	if offset < 0 {
+		index = len(lines) + offset // отрицательные — с конца
+	}
+
+	if index < 0 || index >= len(lines) {
+		fmt.Fprintf(os.Stderr, "history: %d: смещение за пределами диапазона\n", offset)
+		os.Exit(1)
+	}
+
+	lines = append(lines[:index], lines[index+1:]...)
+	err = writeHistory(lines)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "history: не удалось записать историю: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("Запись %d удалена.\n", offset)
 }
 
 func main() {
-	// Определение флагов командной строки
-	helpFlag := flag.Bool("h", false, "Показать справку")
-	clearFlag := flag.Bool("c", false, "Очистить историю команд")
-	nFlag := flag.Int("n", 0, "Показать последние N записей")
+	hflag := flag.Bool("h", false, "справка по команде и параметрам")
+	cflag := flag.Bool("c", false, "очистить историю")
+	doffset := flag.Int("d", 0, "удалить запись по смещению OFFSET")
 	flag.Parse()
 
-	// Обработка флага помощи
-	if *helpFlag {
-		fmt.Println("Использование: history [-h] [-c] [-n N] [команда]")
-		fmt.Println("  -h      Показать справку")
-		fmt.Println("  -c      Очистить историю")
-		fmt.Println("  -n N    Показать последние N команд")
-		fmt.Println()
-		fmt.Println("Для добавления команды: history <команда>")
-		fmt.Println("Файл истории:", historyFile())
-		os.Exit(0)
+	if *hflag {
+		printHelp()
+		return
 	}
 
-	// Очистка истории
-	if *clearFlag {
-		if err := os.Remove(historyFile()); err != nil && !os.IsNotExist(err) {
-			fmt.Fprintf(os.Stderr, "history: не удалось очистить историю: %v\n", err)
-			os.Exit(1)
-		}
-		fmt.Println("История очищена")
-		os.Exit(0)
+	if *cflag {
+		clearHistory()
+		return
 	}
 
-	// Если переданы аргументы — добавляем команду в историю
+	if *doffset != 0 {
+		deleteEntry(*doffset)
+		return
+	}
+
+	// Показать последние N записей или всю историю
 	args := flag.Args()
+	n := 0
 	if len(args) > 0 {
-		cmd := strings.Join(args, " ")
-		if err := saveHistory(cmd); err != nil {
-			fmt.Fprintf(os.Stderr, "history: не удалось сохранить команду: %v\n", err)
+		val, err := strconv.Atoi(args[0])
+		if err != nil || val < 0 {
+			fmt.Fprintf(os.Stderr, "history: %s: числовой аргумент требуется\n", args[0])
 			os.Exit(1)
 		}
-		fmt.Printf("Добавлено в историю: %s\n", cmd)
-		os.Exit(0)
+		n = val
 	}
 
-	// Загружаем и выводим историю
-	entries := loadHistory()
-
-	if len(entries) == 0 {
-		fmt.Println("История пуста")
-		os.Exit(0)
-	}
-
-	// Если указано -n, выводим только последние N записей
-	if *nFlag > 0 {
-		if *nFlag > len(entries) {
-			*nFlag = len(entries)
-		}
-		entries = entries[len(entries)-*nFlag:]
-	}
-
-	for _, e := range entries {
-		fmt.Printf("%5d  %s\n", e.Number, e.Command)
-	}
+	showHistory(n)
 }
 
-// Вспомогательная функция для !! и !n: получить команду из истории
-func getHistoryCommand(n int) (string, error) {
-	entries := loadHistory()
-	if len(entries) == 0 {
-		return "", fmt.Errorf("история пуста")
-	}
-	if n == 0 {
-		// !! — последняя команда
-		return entries[len(entries)-1].Command, nil
-	}
-	// !n — команда с номером n
-	for _, e := range entries {
-		if e.Number == n {
-			return e.Command, nil
-		}
-	}
-	return "", fmt.Errorf("команда %d не найдена в истории", n)
-}
+func printHelp() {
+	fmt.Println(`Использование: history [параметры]
+Показывает историю терминала.
 
-// Функция для получения строки в виде числа
-func parseNum(s string) (int, error) {
-	n, err := strconv.Atoi(s)
-	if err != nil {
-		return 0, fmt.Errorf("недопустимое число: %s", s)
-	}
-	return n, nil
+Параметры:
+  -h            справка по команде и параметрам
+  -c            очистить историю (удалить все записи)
+  -d OFFSET     удалить запись истории по смещению OFFSET
+                (отрицательные значения отсчитываются с конца)
+  [n]           показать только последние N записей (опционально)
+
+Примеры:
+  history           - показать всю историю
+  history -c        - очистить историю
+  history -d 5      - удалить 5-ю запись
+  history -d -2     - удалить предпоследнюю запись
+  history 10        - показать последние 10 записей`)
 }
